@@ -109,11 +109,6 @@ export default function App() {
     activeEvents: [],
     phase: "INVESTING",
     currentYearHistory: [],
-    budget: {
-      rent: 1200,
-      food: 400,
-      wants: 200,
-    },
     fastForwardYears: 1,
   });
 
@@ -179,8 +174,6 @@ export default function App() {
     if (gameState.phase === "SIMULATING") {
       simInterval.current = setInterval(() => {
         setGameState(prev => {
-          const monthlyExpenses = prev.budget.rent + prev.budget.food + prev.budget.wants;
-          
           if (prev.month >= 12) {
             if (prev.fastForwardYears > 1) {
               const nextYear = prev.year + 1;
@@ -223,17 +216,10 @@ export default function App() {
             };
           });
 
-          const newBalance = prev.balance - monthlyExpenses;
-          if (newBalance < 0) {
-             if (simInterval.current) clearInterval(simInterval.current);
-             setIsGameOver(true);
-          }
-
-          const netWorth = calculateNetWorth({ ...prev, balance: newBalance, stocks: newStocks });
+          const netWorth = calculateNetWorth({ ...prev, stocks: newStocks });
           
           return {
             ...prev,
-            balance: newBalance,
             month: currentMonth,
             stocks: newStocks,
             currentYearHistory: [...prev.currentYearHistory, { month: currentMonth, netWorth }]
@@ -288,31 +274,32 @@ export default function App() {
     }));
   };
 
-  const buyStock = (stockId: string) => {
+  const buyStock = (stockId: string, quantity: number) => {
     const stock = gameState.stocks.find(s => s.id === stockId);
-    if (!stock || gameState.balance < stock.price) return;
+    const totalCost = stock ? stock.price * quantity : 0;
+    if (!stock || gameState.balance < totalCost || quantity <= 0) return;
 
     setGameState(prev => ({
       ...prev,
-      balance: prev.balance - stock.price,
+      balance: prev.balance - totalCost,
       portfolio: {
         ...prev.portfolio,
-        [stockId]: (prev.portfolio[stockId] || 0) + 1,
+        [stockId]: (prev.portfolio[stockId] || 0) + quantity,
       }
     }));
   };
 
-  const sellStock = (stockId: string) => {
+  const sellStock = (stockId: string, quantity: number) => {
     const stock = gameState.stocks.find(s => s.id === stockId);
     const owned = gameState.portfolio[stockId] || 0;
-    if (!stock || owned <= 0) return;
+    if (!stock || owned < quantity || quantity <= 0) return;
 
     setGameState(prev => ({
       ...prev,
-      balance: prev.balance + stock.price,
+      balance: prev.balance + (stock.price * quantity),
       portfolio: {
         ...prev.portfolio,
-        [stockId]: owned - 1,
+        [stockId]: owned - quantity,
       }
     }));
   };
@@ -411,26 +398,19 @@ export default function App() {
                     </p>
                   </div>
                   
-                  {/* Budgeting Section */}
-                  <div className="bg-gray-50 border-4 border-black p-4 space-y-3">
-                    <h3 className="font-black uppercase text-sm tracking-widest">Monthly Budget</h3>
-                    <div className="grid grid-cols-3 gap-4">
-                      <div className="flex flex-col">
-                        <span className="text-[10px] uppercase font-black text-gray-500">Rent (Need)</span>
-                        <span className="font-mono font-black">${gameState.budget.rent}</span>
+                  <div className="flex items-center gap-8">
+                    <div className="flex flex-col">
+                      <span className="text-[10px] uppercase tracking-widest text-gray-500 font-black">Current Net Worth</span>
+                      <div className="flex items-center gap-2 text-4xl text-monopoly-blue font-mono font-black">
+                        <TrendingUp size={28} />
+                        ${netWorth.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                       </div>
-                      <div className="flex flex-col">
-                        <span className="text-[10px] uppercase font-black text-gray-500">Food (Need)</span>
-                        <span className="font-mono font-black">${gameState.budget.food}</span>
-                      </div>
-                      <div className="flex flex-col">
-                        <span className="text-[10px] uppercase font-black text-gray-500">Wants</span>
-                        <input 
-                          type="number" 
-                          value={gameState.budget.wants}
-                          onChange={(e) => setGameState(prev => ({ ...prev, budget: { ...prev.budget, wants: Math.max(0, parseInt(e.target.value) || 0) } }))}
-                          className="font-mono font-black bg-transparent border-b-2 border-black focus:outline-none w-20"
-                        />
+                    </div>
+                    <div className="h-12 w-1 bg-black/10" />
+                    <div className="flex flex-col">
+                      <span className="text-[10px] uppercase tracking-widest text-gray-500 font-black">Portfolio Value</span>
+                      <div className="text-2xl font-mono font-black text-black">
+                        ${gameState.stocks.reduce((acc, s) => acc + (gameState.portfolio[s.id] || 0) * s.price, 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
                       </div>
                     </div>
                   </div>
@@ -466,7 +446,7 @@ export default function App() {
                     onBuy={buyStock}
                     onSell={sellStock}
                     owned={gameState.portfolio[stock.id] || 0}
-                    canAfford={gameState.balance >= stock.price}
+                    balance={gameState.balance}
                   />
                 ))}
               </div>
