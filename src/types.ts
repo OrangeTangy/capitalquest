@@ -33,7 +33,13 @@ export interface Policy {
   effect: (state: GameState) => GameState;
 }
 
-export type GamePhase = "INVESTING" | "SIMULATING" | "EVENT" | "SUMMARY";
+export interface Budget {
+  rent: number;
+  food: number;
+  wants: number;
+}
+
+export type GamePhase = "INVESTING" | "SIMULATING" | "EVENT" | "SUMMARY" | "GAMEOVER";
 
 export interface GameState {
   balance: number;
@@ -46,4 +52,6 @@ export interface GameState {
   activeEvents: GameEvent[];
   phase: GamePhase;
   currentYearHistory: { month: number; netWorth: number }[];
+  budget: Budget;
+  fastForwardYears: number;
 }

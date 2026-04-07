@@ -1,0 +1,60 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: leaderboard
+    // Document ID: auto-generated
+    // Fields:
+    //   - name: string (required, 1-50 chars) - Player's name
+    //   - netWorth: number (required, positive) - Final net worth
+    //   - year: number (required, 1-60) - Game end year
+    //   - timestamp: timestamp (required) - When score was recorded
+    //   - uid: string (required) - Player's UID
+    //
+    // ===============================================================
+
+    // Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "raidernate27@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isValidLeaderboardEntry(data) {
+      return data.keys().hasAll(['name', 'netWorth', 'year', 'timestamp', 'uid']) &&
+             data.keys().hasOnly(['name', 'netWorth', 'year', 'timestamp', 'uid']) &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 50 &&
+             data.netWorth is number &&
+             data.year is number && data.year >= 1 && data.year <= 60 &&
+             data.timestamp is timestamp &&
+             data.uid is string && data.uid == request.auth.uid;
+    }
+
+    match /leaderboard/{entryId} {
+      // Allow anyone to read the leaderboard (public scores)
+      allow read: if true;
+      
+      // Allow authenticated users to create their own entry
+      allow create: if isAuthenticated() && isValidLeaderboardEntry(request.resource.data);
+      
+      // No updates or deletes allowed for regular users to prevent score tampering
+      allow update, delete: if isAdmin();
+    }
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow write: if isOwner(userId) || isAdmin();
+    }
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "entities": {
+    "leaderboard": {
+      "title": "Leaderboard Entry",
+      "description": "A record of a player's final net worth after 60 years.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "The player's name."
+        },
+        "netWorth": {
+          "type": "number",
+          "description": "The final net worth achieved."
+        },
+        "year": {
+          "type": "number",
+          "description": "The year the game ended (usually 60)."
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the score was recorded."
+        },
+        "uid": {
+          "type": "string",
+          "description": "The unique identifier of the player."
+        }
+      },
+      "required": ["name", "netWorth", "year", "timestamp", "uid"]
+    }
+  },
+  "firestore": {
+    "/leaderboard/{entryId}": {
+      "schema": "leaderboard",
+      "description": "Collection of high scores."
+    }
+  }
+}

@@ -17,17 +17,87 @@ import {
   Receipt,
   Trophy,
   ArrowUpRight,
-  ArrowDownRight
+  ArrowDownRight,
+  LogIn,
+  LogOut,
+  User
 } from "lucide-react";
 import { GameState, Stock, Loan, GameEvent, GamePhase } from "./types";
 import { INITIAL_STOCKS, POTENTIAL_EVENTS, LIFE_EVENTS } from "./constants";
 import { StockCard } from "./components/StockCard";
 import { cn } from "./lib/utils";
 import { StockChart } from "./components/StockChart";
+import { auth, db, googleProvider, signInWithPopup } from "./firebase";
+import { 
+  collection, 
+  addDoc, 
+  query, 
+  orderBy, 
+  limit, 
+  onSnapshot, 
+  serverTimestamp,
+  Timestamp
+} from "firebase/firestore";
+import { onAuthStateChanged, signOut, User as FirebaseUser } from "firebase/auth";
 
 const INITIAL_BALANCE = 10000;
 
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId: string | undefined;
+    email: string | null | undefined;
+    emailVerified: boolean | undefined;
+    isAnonymous: boolean | undefined;
+    tenantId: string | null | undefined;
+    providerInfo: {
+      providerId: string;
+      displayName: string | null;
+      email: string | null;
+      photoUrl: string | null;
+    }[];
+  }
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData.map(provider => ({
+        providerId: provider.providerId,
+        displayName: provider.displayName,
+        email: provider.email,
+        photoUrl: provider.photoURL
+      })) || []
+    },
+    operationType,
+    path
+  }
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
+
 export default function App() {
+  const [user, setUser] = useState<FirebaseUser | null>(null);
+  const [leaderboard, setLeaderboard] = useState<any[]>([]);
+  const [hasSavedScore, setHasSavedScore] = useState(false);
+  
   const [gameState, setGameState] = useState<GameState>({
     balance: INITIAL_BALANCE,
     year: 1,
@@ -39,12 +109,38 @@ export default function App() {
     activeEvents: [],
     phase: "INVESTING",
     currentYearHistory: [],
+    budget: {
+      rent: 1200,
+      food: 400,
+      wants: 200,
+    },
+    fastForwardYears: 1,
   });
 
   const [pendingEvent, setPendingEvent] = useState<any>(null);
   const [isGameOver, setIsGameOver] = useState(false);
-  const [simulationSpeed] = useState(300); // ms per month
+  const [simulationSpeed] = useState(150); // Faster simulation for fast forward
   const simInterval = useRef<NodeJS.Timeout | null>(null);
+
+  // Auth Listener
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setUser(user);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Leaderboard Listener
+  useEffect(() => {
+    const q = query(collection(db, "leaderboard"), orderBy("netWorth", "desc"), limit(10));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const scores = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setLeaderboard(scores);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, "leaderboard");
+    });
+    return () => unsubscribe();
+  }, []);
 
   const calculateNetWorth = (state: GameState) => {
     const stockValue = state.stocks.reduce((acc, stock) => {
@@ -55,19 +151,61 @@ export default function App() {
     return state.balance + stockValue - debtValue;
   };
 
+  const netWorth = calculateNetWorth(gameState);
+
+  // Save score when game ends
+  useEffect(() => {
+    if (gameState.phase === "GAMEOVER" && user && !hasSavedScore) {
+      const saveScore = async () => {
+        try {
+          await addDoc(collection(db, "leaderboard"), {
+            name: user.displayName || "Anonymous",
+            netWorth: netWorth,
+            year: gameState.year,
+            timestamp: serverTimestamp(),
+            uid: user.uid
+          });
+          setHasSavedScore(true);
+        } catch (error) {
+          handleFirestoreError(error, OperationType.CREATE, "leaderboard");
+        }
+      };
+      saveScore();
+    }
+  }, [gameState.phase, user, hasSavedScore, netWorth, gameState.year]);
+
   // Simulation Logic
   useEffect(() => {
     if (gameState.phase === "SIMULATING") {
       simInterval.current = setInterval(() => {
         setGameState(prev => {
+          const monthlyExpenses = prev.budget.rent + prev.budget.food + prev.budget.wants;
+          
           if (prev.month >= 12) {
-            if (simInterval.current) clearInterval(simInterval.current);
-            return { ...prev, phase: "SUMMARY" };
+            if (prev.fastForwardYears > 1) {
+              const nextYear = prev.year + 1;
+              if (nextYear > 60) {
+                if (simInterval.current) clearInterval(simInterval.current);
+                return { ...prev, phase: "GAMEOVER" };
+              }
+              
+              return {
+                ...prev,
+                year: nextYear,
+                month: 1,
+                fastForwardYears: prev.fastForwardYears - 1,
+                history: [...prev.history, { year: prev.year, month: 12, netWorth: calculateNetWorth(prev) }],
+                currentYearHistory: [{ month: 0, netWorth: calculateNetWorth(prev) }]
+              };
+            } else {
+              if (simInterval.current) clearInterval(simInterval.current);
+              if (prev.year >= 60) return { ...prev, phase: "GAMEOVER" };
+              return { ...prev, phase: "SUMMARY" };
+            }
           }
 
           const currentMonth = prev.month + 1;
           
-          // Random Life Event at Month 6
           if (currentMonth === 6) {
             const event = LIFE_EVENTS[Math.floor(Math.random() * LIFE_EVENTS.length)];
             setPendingEvent(event);
@@ -75,7 +213,6 @@ export default function App() {
             return { ...prev, month: currentMonth, phase: "EVENT" };
           }
 
-          // Update Stocks
           const newStocks = prev.stocks.map(stock => {
             const changePercent = (Math.random() - 0.5) * stock.volatility + stock.trend;
             const newPrice = Math.max(1, stock.price * (1 + changePercent));
@@ -86,10 +223,17 @@ export default function App() {
             };
           });
 
-          const netWorth = calculateNetWorth({ ...prev, stocks: newStocks });
+          const newBalance = prev.balance - monthlyExpenses;
+          if (newBalance < 0) {
+             if (simInterval.current) clearInterval(simInterval.current);
+             setIsGameOver(true);
+          }
+
+          const netWorth = calculateNetWorth({ ...prev, balance: newBalance, stocks: newStocks });
           
           return {
             ...prev,
+            balance: newBalance,
             month: currentMonth,
             stocks: newStocks,
             currentYearHistory: [...prev.currentYearHistory, { month: currentMonth, netWorth }]
@@ -102,6 +246,22 @@ export default function App() {
       if (simInterval.current) clearInterval(simInterval.current);
     };
   }, [gameState.phase]);
+
+  const login = async () => {
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (error) {
+      console.error("Login failed", error);
+    }
+  };
+
+  const logout = async () => {
+    try {
+      await signOut(auth);
+    } catch (error) {
+      console.error("Logout failed", error);
+    }
+  };
 
   const startSimulation = () => {
     setGameState(prev => ({ 
@@ -166,7 +326,6 @@ export default function App() {
     resumeSimulation();
   };
 
-  const netWorth = calculateNetWorth(gameState);
   const startOfYearNetWorth = gameState.history.find(h => h.year === gameState.year - 1)?.netWorth || INITIAL_BALANCE;
   const yearPerformance = ((netWorth - startOfYearNetWorth) / startOfYearNetWorth) * 100;
 
@@ -188,12 +347,39 @@ export default function App() {
             </div>
           </div>
           
-          <div className="flex items-center gap-8">
+          <div className="flex items-center gap-6">
+            {user ? (
+              <div className="flex items-center gap-4 bg-white border-4 border-black p-2 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+                <div className="w-10 h-10 bg-monopoly-blue border-2 border-black flex items-center justify-center">
+                  {user.photoURL ? (
+                    <img src={user.photoURL} alt={user.displayName || ""} className="w-full h-full object-cover" />
+                  ) : (
+                    <User className="text-white" size={20} />
+                  )}
+                </div>
+                <div className="hidden md:block">
+                  <div className="text-[10px] font-black uppercase tracking-widest text-gray-500">Player</div>
+                  <div className="text-sm font-black uppercase italic tracking-tighter">{user.displayName}</div>
+                </div>
+                <button onClick={logout} className="p-2 hover:text-monopoly-red transition-colors">
+                  <LogOut size={20} />
+                </button>
+              </div>
+            ) : (
+              <button 
+                onClick={login}
+                className="monopoly-button bg-monopoly-blue text-white flex items-center gap-2 py-2 px-4 text-sm"
+              >
+                <LogIn size={18} /> Login
+              </button>
+            )}
+
+            <div className="h-12 w-1 bg-black" />
+
             <div className="hidden md:flex flex-col items-end">
               <span className="text-[10px] uppercase tracking-widest text-gray-500 font-black">Current Year</span>
               <span className="font-mono text-3xl font-black text-black">{gameState.year}</span>
             </div>
-            <div className="h-12 w-1 bg-black" />
             <div className="flex flex-col items-end">
               <span className="text-[10px] uppercase tracking-widest text-gray-500 font-black">Bank Balance</span>
               <div className="flex items-center gap-2 text-3xl text-monopoly-green font-mono font-black">
@@ -217,18 +403,59 @@ export default function App() {
               className="space-y-12"
             >
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-8 bg-white border-4 border-black p-8 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
-                <div>
-                  <h2 className="text-4xl font-black text-black mb-2 uppercase italic tracking-tighter">Investment Phase</h2>
-                  <p className="text-gray-700 font-medium max-w-xl">
-                    Welcome to Year {gameState.year}. Buy properties and stocks to build your empire. Click "Roll Dice" to simulate the year.
-                  </p>
+                <div className="space-y-4">
+                  <div>
+                    <h2 className="text-4xl font-black text-black mb-2 uppercase italic tracking-tighter">Investment Phase</h2>
+                    <p className="text-gray-700 font-medium max-w-xl">
+                      Welcome to Year {gameState.year}. Buy properties and stocks to build your empire. Click "Roll Dice" to simulate the year.
+                    </p>
+                  </div>
+                  
+                  {/* Budgeting Section */}
+                  <div className="bg-gray-50 border-4 border-black p-4 space-y-3">
+                    <h3 className="font-black uppercase text-sm tracking-widest">Monthly Budget</h3>
+                    <div className="grid grid-cols-3 gap-4">
+                      <div className="flex flex-col">
+                        <span className="text-[10px] uppercase font-black text-gray-500">Rent (Need)</span>
+                        <span className="font-mono font-black">${gameState.budget.rent}</span>
+                      </div>
+                      <div className="flex flex-col">
+                        <span className="text-[10px] uppercase font-black text-gray-500">Food (Need)</span>
+                        <span className="font-mono font-black">${gameState.budget.food}</span>
+                      </div>
+                      <div className="flex flex-col">
+                        <span className="text-[10px] uppercase font-black text-gray-500">Wants</span>
+                        <input 
+                          type="number" 
+                          value={gameState.budget.wants}
+                          onChange={(e) => setGameState(prev => ({ ...prev, budget: { ...prev.budget, wants: Math.max(0, parseInt(e.target.value) || 0) } }))}
+                          className="font-mono font-black bg-transparent border-b-2 border-black focus:outline-none w-20"
+                        />
+                      </div>
+                    </div>
+                  </div>
                 </div>
-                <button
-                  onClick={startSimulation}
-                  className="monopoly-button bg-monopoly-red text-white hover:bg-red-600 flex items-center gap-3 text-xl border-black"
-                >
-                  Roll Dice <ArrowRight size={24} />
-                </button>
+
+                <div className="flex flex-col gap-4">
+                  <div className="flex items-center gap-3 bg-white border-4 border-black p-3">
+                    <span className="text-xs font-black uppercase tracking-widest">Fast Forward</span>
+                    <input 
+                      type="number" 
+                      min="1" 
+                      max={60 - gameState.year + 1}
+                      value={gameState.fastForwardYears}
+                      onChange={(e) => setGameState(prev => ({ ...prev, fastForwardYears: Math.max(1, parseInt(e.target.value) || 1) }))}
+                      className="w-16 font-mono font-black text-center border-b-2 border-black focus:outline-none"
+                    />
+                    <span className="text-xs font-black uppercase tracking-widest">Years</span>
+                  </div>
+                  <button
+                    onClick={startSimulation}
+                    className="monopoly-button bg-monopoly-red text-white hover:bg-red-600 flex items-center justify-center gap-3 text-xl border-black w-full"
+                  >
+                    Roll Dice <ArrowRight size={24} />
+                  </button>
+                </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
@@ -301,19 +528,23 @@ export default function App() {
                 
                 <h2 className="text-6xl font-black text-black mb-10 uppercase italic tracking-tighter border-b-8 border-black pb-4 inline-block">Year {gameState.year} Report</h2>
                 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-12 mb-12">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
                   <div className="space-y-2">
-                    <div className="text-xs text-gray-500 font-black uppercase tracking-widest">Ending Assets</div>
-                    <div className="text-6xl font-mono font-black text-black">${netWorth.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+                    <div className="text-xs text-gray-500 font-black uppercase tracking-widest">Total Assets</div>
+                    <div className="text-4xl font-mono font-black text-black">
+                      ${(gameState.balance + gameState.stocks.reduce((acc, s) => acc + (gameState.portfolio[s.id] || 0) * s.price, 0)).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                    </div>
                   </div>
                   <div className="space-y-2">
-                    <div className="text-xs text-gray-500 font-black uppercase tracking-widest">Annual Growth</div>
-                    <div className={cn(
-                      "text-6xl font-mono font-black flex items-center gap-2",
-                      yearPerformance >= 0 ? "text-monopoly-green" : "text-monopoly-red"
-                    )}>
-                      {yearPerformance >= 0 ? <ArrowUpRight size={56} /> : <ArrowDownRight size={56} />}
-                      {Math.abs(yearPerformance).toFixed(1)}%
+                    <div className="text-xs text-gray-500 font-black uppercase tracking-widest">Total Debt</div>
+                    <div className="text-4xl font-mono font-black text-monopoly-red">
+                      ${gameState.loans.reduce((acc, l) => acc + l.amount, 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <div className="text-xs text-gray-500 font-black uppercase tracking-widest">Net Worth</div>
+                    <div className="text-4xl font-mono font-black text-monopoly-green">
+                      ${netWorth.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                     </div>
                   </div>
                 </div>
@@ -328,6 +559,82 @@ export default function App() {
                 >
                   Pass GO & Collect Year {gameState.year + 1} <ArrowRight size={32} />
                 </button>
+              </div>
+            </motion.div>
+          )}
+
+          {gameState.phase === "GAMEOVER" && (
+            <motion.div
+              key="gameover"
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="max-w-4xl mx-auto space-y-12"
+            >
+              <div className="monopoly-card p-16 text-center space-y-8 bg-monopoly-yellow/10">
+                <div className="w-32 h-32 bg-monopoly-yellow border-8 border-black flex items-center justify-center mx-auto shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
+                  <Trophy className="text-black" size={80} />
+                </div>
+                
+                <div className="space-y-4">
+                  <h2 className="text-7xl font-black text-black uppercase italic tracking-tighter">Retirement Reached!</h2>
+                  <p className="text-2xl font-bold text-gray-700">You've completed your 60-year journey. Here is your final legacy.</p>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+                  <div className="bg-white border-4 border-black p-8 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
+                    <div className="text-sm font-black uppercase tracking-widest text-gray-500 mb-2">Total Assets</div>
+                    <div className="text-4xl font-mono font-black text-black">
+                      ${(gameState.balance + gameState.stocks.reduce((acc, s) => acc + (gameState.portfolio[s.id] || 0) * s.price, 0)).toLocaleString()}
+                    </div>
+                  </div>
+                  <div className="bg-white border-4 border-black p-8 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
+                    <div className="text-sm font-black uppercase tracking-widest text-gray-500 mb-2">Total Debt</div>
+                    <div className="text-4xl font-mono font-black text-monopoly-red">
+                      ${gameState.loans.reduce((acc, l) => acc + l.amount, 0).toLocaleString()}
+                    </div>
+                  </div>
+                  <div className="bg-white border-4 border-black p-8 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
+                    <div className="text-sm font-black uppercase tracking-widest text-gray-500 mb-2">Final Net Worth</div>
+                    <div className="text-4xl font-mono font-black text-monopoly-green">${netWorth.toLocaleString()}</div>
+                  </div>
+                </div>
+
+                <div className="space-y-6">
+                  <h3 className="text-3xl font-black uppercase italic border-b-4 border-black pb-2 inline-block">Leaderboard</h3>
+                  <div className="bg-white border-4 border-black p-6 space-y-4 text-left">
+                    <div className="flex justify-between font-black uppercase text-sm border-b-2 border-black pb-2">
+                      <span>Rank</span>
+                      <span>Name</span>
+                      <span>Net Worth</span>
+                    </div>
+                    {leaderboard.length > 0 ? (
+                      leaderboard.map((entry, i) => (
+                        <div key={entry.id} className={cn(
+                          "flex justify-between font-mono font-bold",
+                          entry.uid === user?.uid ? "text-monopoly-red" : "text-black"
+                        )}>
+                          <span>#{i + 1}</span>
+                          <span>{entry.name}</span>
+                          <span>${entry.netWorth.toLocaleString()}</span>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-center py-4 text-gray-400 italic">No scores recorded yet...</div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-4">
+                  {!user && (
+                    <p className="text-monopoly-red font-black uppercase text-xs">Login to save your score to the leaderboard!</p>
+                  )}
+                  <button
+                    onClick={() => window.location.reload()}
+                    className="monopoly-button bg-black text-white hover:bg-gray-800 text-2xl w-full py-6"
+                  >
+                    Start New Empire
+                  </button>
+                </div>
               </div>
             </motion.div>
           )}
