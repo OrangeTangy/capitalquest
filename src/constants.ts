@@ -1,0 +1,132 @@
+import { Stock, GameEvent } from "./types";
+
+export const POTENTIAL_EVENTS: GameEvent[] = [
+  {
+    id: "tech_boom",
+    title: "Tech Revolution",
+    description: "New AI breakthroughs are driving technology stocks to new heights.",
+    impact: { Technology: 0.05 },
+    duration: 5,
+  },
+  {
+    id: "energy_crisis",
+    title: "Energy Supply Shock",
+    description: "Global tensions are causing energy prices to skyrocket.",
+    impact: { Energy: 0.08, Industrial: -0.02 },
+    duration: 4,
+  },
+  {
+    id: "healthcare_reform",
+    title: "Healthcare Reform",
+    description: "New regulations are impacting pharmaceutical profit margins.",
+    impact: { Healthcare: -0.04 },
+    duration: 6,
+  },
+  {
+    id: "retail_surge",
+    title: "Holiday Spending Spree",
+    description: "Consumer confidence is at an all-time high.",
+    impact: { Consumer: 0.03 },
+    duration: 3,
+  },
+];
+
+export const INITIAL_STOCKS: Stock[] = [
+  {
+    id: "spy",
+    name: "Market Index",
+    symbol: "SPY",
+    price: 400,
+    history: [{ time: 0, price: 400 }],
+    volatility: 0.02,
+    trend: 0.015,
+    sector: "Market",
+    description: "A basket of the 500 largest companies. Slow, steady, and reliable growth.",
+  },
+  {
+    id: "1",
+    name: "TechNova Solutions",
+    symbol: "TNV",
+    price: 150,
+    history: [{ time: 0, price: 150 }],
+    volatility: 0.08,
+    trend: 0.02,
+    sector: "Technology",
+    description: "Cutting-edge AI and cloud computing. High risk, high reward potential.",
+  },
+  {
+    id: "2",
+    name: "GreenGrid Energy",
+    symbol: "GGE",
+    price: 85,
+    history: [{ time: 0, price: 85 }],
+    volatility: 0.04,
+    trend: 0.01,
+    sector: "Energy",
+    description: "Renewable energy infrastructure. Stable returns with a green future.",
+  },
+  {
+    id: "3",
+    name: "BioPharma Corp",
+    symbol: "BIO",
+    price: 210,
+    history: [{ time: 0, price: 210 }],
+    volatility: 0.12,
+    trend: -0.01,
+    sector: "Healthcare",
+    description: "Pharmaceutical giant. Volatile based on clinical trial results.",
+  },
+  {
+    id: "4",
+    name: "Stellar Retail",
+    symbol: "STR",
+    price: 45,
+    history: [{ time: 0, price: 45 }],
+    volatility: 0.06,
+    trend: 0.005,
+    sector: "Consumer",
+    description: "Global retail chain. Performance tied to consumer spending habits.",
+  },
+  {
+    id: "5",
+    name: "IronForge Heavy",
+    symbol: "IFH",
+    price: 120,
+    history: [{ time: 0, price: 120 }],
+    volatility: 0.03,
+    trend: 0.015,
+    sector: "Industrial",
+    description: "Heavy machinery and manufacturing. Solid backbone of the economy.",
+  },
+];
+
+export const LIFE_EVENTS = [
+  {
+    id: "car_trouble",
+    title: "Car Trouble!",
+    description: "Your transmission gave out. That's going to cost you.",
+    cost: 1500,
+    icon: "Car",
+  },
+  {
+    id: "student_loans",
+    title: "Student Loan Payment",
+    description: "The grace period is over. Time to pay up.",
+    cost: 800,
+    icon: "GraduationCap",
+  },
+  {
+    id: "medical_bill",
+    title: "Unexpected Medical Bill",
+    description: "A quick trip to the ER wasn't in the budget.",
+    cost: 1200,
+    icon: "Stethoscope",
+  },
+  {
+    id: "tax_refund",
+    title: "Tax Refund",
+    description: "The IRS actually owes YOU money this year!",
+    cost: -1000, // Negative cost is a gain
+    icon: "Receipt",
+  },
+];

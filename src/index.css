@@ -1,0 +1,38 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;700;900&family=Montserrat:wght@400;700;900&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Outfit", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Montserrat", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  
+  --color-monopoly-red: #ed1b24;
+  --color-monopoly-blue: #0072bb;
+  --color-monopoly-green: #1fb25a;
+  --color-monopoly-yellow: #ffed00;
+  --color-monopoly-orange: #f7941d;
+  --color-monopoly-magenta: #d93a96;
+  --color-monopoly-board: #f3f2ed;
+}
+
+@layer base {
+  body {
+    @apply bg-monopoly-board text-black antialiased font-sans;
+  }
+  
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-display;
+  }
+}
+
+.monopoly-card {
+  @apply bg-white border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] transition-all active:translate-x-1 active:translate-y-1 active:shadow-none;
+}
+
+.monopoly-button {
+  @apply bg-white border-4 border-black px-6 py-3 font-black uppercase italic tracking-tighter shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:bg-gray-100 active:translate-x-0.5 active:translate-y-0.5 active:shadow-none transition-all disabled:opacity-50 disabled:cursor-not-allowed text-black;
+}
+
+.monopoly-header {
+  @apply bg-white border-b-4 border-black sticky top-0 z-50;
+}
