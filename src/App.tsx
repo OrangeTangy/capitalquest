@@ -110,6 +110,7 @@ export default function App() {
     phase: "INVESTING",
     currentYearHistory: [],
     fastForwardYears: 1,
+    fastForwardSummary: [],
   });
 
   const [pendingEvent, setPendingEvent] = useState<any>(null);
@@ -199,19 +200,43 @@ export default function App() {
 
           const currentMonth = prev.month + 1;
           
+          // Randomly trigger Market Events (POTENTIAL_EVENTS)
+          let newActiveEvents = prev.activeEvents.map(e => ({ ...e, duration: e.duration - 1 })).filter(e => e.duration > 0);
+          if (Math.random() < 0.02 && newActiveEvents.length < 2) { // 2% chance per month
+            const randomEvent = POTENTIAL_EVENTS[Math.floor(Math.random() * POTENTIAL_EVENTS.length)];
+            if (!newActiveEvents.find(e => e.id === randomEvent.id)) {
+              newActiveEvents.push(randomEvent);
+            }
+          }
+
           if (currentMonth === 6) {
             const event = LIFE_EVENTS[Math.floor(Math.random() * LIFE_EVENTS.length)];
             setPendingEvent(event);
             if (simInterval.current) clearInterval(simInterval.current);
-            return { ...prev, month: currentMonth, phase: "EVENT" };
+            return { ...prev, month: currentMonth, phase: "EVENT", activeEvents: newActiveEvents };
           }
 
           const newStocks = prev.stocks.map(stock => {
-            const changePercent = (Math.random() - 0.5) * stock.volatility + stock.trend;
+            // Calculate combined impact from active events
+            const eventImpact = newActiveEvents.reduce((acc, event) => {
+              const sectorImpact = event.impact[stock.sector] || 0;
+              const marketImpact = event.impact["Market"] || 0;
+              return acc + sectorImpact + marketImpact;
+            }, 0);
+
+            // Random trend shift (market cycles)
+            let currentTrend = stock.trend;
+            if (currentMonth === 1) { // Shift trend at start of year
+              currentTrend += (Math.random() - 0.5) * 0.002;
+              currentTrend = Math.max(-0.01, Math.min(0.015, currentTrend));
+            }
+
+            const changePercent = (Math.random() - 0.5) * stock.volatility + currentTrend + eventImpact;
             const newPrice = Math.max(1, stock.price * (1 + changePercent));
             return {
               ...stock,
               price: newPrice,
+              trend: currentTrend,
               history: [...stock.history, { time: prev.year * 12 + currentMonth, price: newPrice }].slice(-20),
             };
           });
@@ -222,6 +247,7 @@ export default function App() {
             ...prev,
             month: currentMonth,
             stocks: newStocks,
+            activeEvents: newActiveEvents,
             currentYearHistory: [...prev.currentYearHistory, { month: currentMonth, netWorth }]
           };
         });
@@ -250,12 +276,106 @@ export default function App() {
   };
 
   const startSimulation = () => {
-    setGameState(prev => ({ 
-      ...prev, 
-      phase: "SIMULATING", 
-      month: 0, 
-      currentYearHistory: [{ month: 0, netWorth: calculateNetWorth(prev) }] 
-    }));
+    if (gameState.fastForwardYears > 1) {
+      // Instant Fast Forward
+      setGameState(prev => {
+        let currentBalance = prev.balance;
+        let currentYear = prev.year;
+        let currentStocks = [...prev.stocks];
+        let currentHistory = [...prev.history];
+        let activeEvents: GameEvent[] = [...prev.activeEvents];
+        let summary: any[] = [];
+        const totalYears = prev.fastForwardYears;
+
+        for (let y = 0; y < totalYears; y++) {
+          const yearNum = currentYear + y;
+          if (yearNum > 60) break;
+
+          for (let m = 1; m <= 12; m++) {
+            // Update Active Events
+            activeEvents = activeEvents.map(e => ({ ...e, duration: e.duration - 1 })).filter(e => e.duration > 0);
+            
+            // Randomly trigger Market Events
+            if (Math.random() < 0.02 && activeEvents.length < 2) {
+              const randomEvent = POTENTIAL_EVENTS[Math.floor(Math.random() * POTENTIAL_EVENTS.length)];
+              if (!activeEvents.find(e => e.id === randomEvent.id)) {
+                activeEvents.push(randomEvent);
+                summary.push({
+                  year: yearNum,
+                  month: m,
+                  title: `MARKET: ${randomEvent.title}`,
+                  cost: 0,
+                  isMarket: true
+                });
+              }
+            }
+
+            // Update Stocks
+            currentStocks = currentStocks.map(stock => {
+              const eventImpact = activeEvents.reduce((acc, event) => {
+                const sectorImpact = event.impact[stock.sector] || 0;
+                const marketImpact = event.impact["Market"] || 0;
+                return acc + sectorImpact + marketImpact;
+              }, 0);
+
+              let currentTrend = stock.trend;
+              if (m === 1) {
+                currentTrend += (Math.random() - 0.5) * 0.002;
+                currentTrend = Math.max(-0.01, Math.min(0.015, currentTrend));
+              }
+
+              const changePercent = (Math.random() - 0.5) * stock.volatility + currentTrend + eventImpact;
+              const newPrice = Math.max(1, stock.price * (1 + changePercent));
+              return {
+                ...stock,
+                price: newPrice,
+                trend: currentTrend,
+                history: [...stock.history, { time: yearNum * 12 + m, price: newPrice }].slice(-20),
+              };
+            });
+
+            // Random Life Event at Month 6
+            if (m === 6) {
+              const event = LIFE_EVENTS[Math.floor(Math.random() * LIFE_EVENTS.length)];
+              currentBalance -= event.cost;
+              summary.push({
+                year: yearNum,
+                month: m,
+                title: event.title,
+                cost: event.cost
+              });
+            }
+          }
+
+          const yearEndNetWorth = currentBalance + currentStocks.reduce((acc, s) => acc + (prev.portfolio[s.id] || 0) * s.price, 0);
+          currentHistory.push({ year: yearNum, month: 12, netWorth: yearEndNetWorth });
+        }
+
+        const finalYear = Math.min(60, currentYear + totalYears - 1);
+        const nextPhase = finalYear >= 60 ? "GAMEOVER" : "FASTFORWARD_SUMMARY";
+
+        return {
+          ...prev,
+          balance: currentBalance,
+          year: finalYear,
+          month: 12,
+          stocks: currentStocks,
+          history: currentHistory,
+          activeEvents: activeEvents,
+          fastForwardSummary: summary,
+          phase: nextPhase as any,
+          fastForwardYears: 1 // Reset
+        };
+      });
+    } else {
+      // Normal Simulation
+      setGameState(prev => ({ 
+        ...prev, 
+        phase: "SIMULATING", 
+        month: 0, 
+        currentYearHistory: [{ month: 0, netWorth: calculateNetWorth(prev) }] 
+      }));
+    }
   };
 
   const resumeSimulation = () => {
@@ -270,6 +390,7 @@ export default function App() {
       month: 1,
       phase: "INVESTING",
       currentYearHistory: [],
+      fastForwardSummary: [],
       history: [...prev.history, { year: prev.year, month: 12, netWorth: calculateNetWorth(prev) }]
     }));
   };
@@ -414,6 +535,21 @@ export default function App() {
                       </div>
                     </div>
                   </div>
+
+                  {/* Active Market Events */}
+                  {gameState.activeEvents.length > 0 && (
+                    <div className="flex flex-wrap gap-3">
+                      {gameState.activeEvents.map(event => (
+                        <div key={event.id} className="flex items-center gap-2 bg-monopoly-blue/10 border-2 border-monopoly-blue p-2 px-3 rounded-sm">
+                          <AlertCircle className="text-monopoly-blue" size={16} />
+                          <div className="flex flex-col">
+                            <span className="text-[10px] font-black uppercase tracking-tight text-monopoly-blue leading-none">{event.title}</span>
+                            <span className="text-[8px] font-bold text-monopoly-blue/70 uppercase tracking-widest">{event.duration} months left</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex flex-col gap-4">
@@ -538,6 +674,67 @@ export default function App() {
                   className="monopoly-button w-full bg-monopoly-blue text-white hover:bg-blue-600 flex items-center justify-center gap-4 text-2xl py-6"
                 >
                   Pass GO & Collect Year {gameState.year + 1} <ArrowRight size={32} />
+                </button>
+              </div>
+            </motion.div>
+          )}
+
+          {gameState.phase === "FASTFORWARD_SUMMARY" && (
+            <motion.div
+              key="ff-summary"
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="max-w-4xl mx-auto space-y-8"
+            >
+              <div className="monopoly-card p-12 relative overflow-hidden">
+                <div className="absolute top-0 right-0 p-8">
+                  <Calendar className="text-monopoly-blue opacity-40" size={120} />
+                </div>
+                
+                <h2 className="text-6xl font-black text-black mb-10 uppercase italic tracking-tighter border-b-8 border-black pb-4 inline-block">Fast Forward Report</h2>
+                
+                <p className="text-xl font-bold text-gray-700 mb-8">
+                  You've advanced to Year {gameState.year}. Here are the events that occurred during your journey:
+                </p>
+
+                <div className="bg-white border-4 border-black p-6 space-y-4 mb-12 max-h-96 overflow-y-auto shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
+                  <div className="flex justify-between font-black uppercase text-xs border-b-2 border-black pb-2 sticky top-0 bg-white">
+                    <span>Year/Month</span>
+                    <span>Event</span>
+                    <span>Cost</span>
+                  </div>
+                  {gameState.fastForwardSummary.map((event, i) => (
+                    <div key={i} className={cn(
+                      "flex justify-between font-mono text-sm border-b border-gray-100 py-2",
+                      event.isMarket ? "bg-monopoly-blue/5" : ""
+                    )}>
+                      <span className="font-black">Y{event.year} M{event.month}</span>
+                      <span className={cn("italic", event.isMarket ? "text-monopoly-blue font-black" : "")}>
+                        {event.title}
+                      </span>
+                      <span className={cn("font-black", event.cost > 0 ? "text-monopoly-red" : (event.cost < 0 ? "text-monopoly-green" : "text-gray-400"))}>
+                        {event.cost === 0 ? "---" : (event.cost > 0 ? "-" : "+") + "$" + Math.abs(event.cost).toLocaleString()}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-12">
+                  <div className="bg-gray-50 border-4 border-black p-6">
+                    <div className="text-xs text-gray-500 font-black uppercase tracking-widest mb-1">Final Balance</div>
+                    <div className="text-4xl font-mono font-black text-monopoly-green">${gameState.balance.toLocaleString()}</div>
+                  </div>
+                  <div className="bg-gray-50 border-4 border-black p-6">
+                    <div className="text-xs text-gray-500 font-black uppercase tracking-widest mb-1">Final Net Worth</div>
+                    <div className="text-4xl font-mono font-black text-black">${netWorth.toLocaleString()}</div>
+                  </div>
+                </div>
+
+                <button
+                  onClick={startNextYear}
+                  className="monopoly-button w-full bg-monopoly-blue text-white hover:bg-blue-600 flex items-center justify-center gap-4 text-2xl py-6"
+                >
+                  Continue to Year {gameState.year + 1} <ArrowRight size={32} />
                 </button>
               </div>
             </motion.div>
